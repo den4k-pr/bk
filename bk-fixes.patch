@@ -1,0 +1,1129 @@
+diff --git a/components/Books/BookReader/Translation/TranslationBottomSheet.styles.ts b/components/Books/BookReader/Translation/TranslationBottomSheet.styles.ts
+index acfbec0..dcfd457 100644
+--- a/components/Books/BookReader/Translation/TranslationBottomSheet.styles.ts
++++ b/components/Books/BookReader/Translation/TranslationBottomSheet.styles.ts
+@@ -101,6 +101,10 @@ export const styles = StyleSheet.create({
+     fontWeight: '800',
+     color: COLORS.ink,
+     textAlign: 'center',
++    // Android додає невидимий відступ над/під шрифтом — через нього
++    // старі картки виглядали з "зайвими пробілами" і не по центру.
++    includeFontPadding: false,
++    textAlignVertical: 'center',
+     letterSpacing: -0.2,
+     maxWidth: "75%"
+   },
+@@ -114,6 +118,7 @@ export const styles = StyleSheet.create({
+     color: COLORS.muted,
+     letterSpacing: 0.3,
+     textAlign: 'center',
++    includeFontPadding: false,
+   },
+ 
+   /* ── Нижня частина ──────────────────────────────────────── */
+@@ -148,12 +153,18 @@ export const styles = StyleSheet.create({
+ 
+   translationContainer: {
+     minHeight: 24,
++    width: '100%',
+     justifyContent: 'center',
++    alignItems: 'center',
+   },
+   translationText: {
++    // Переклад займає всю ширину, а рядки центруються — раніше довгий
++    // переклад старої картки "прилипав" до лівого краю.
++    alignSelf: 'stretch',
+     fontSize: FONT_SIZE.medium,
+     color: COLORS.inkSoft,
+     textAlign: 'center',
++    includeFontPadding: false,
+     fontWeight: '600',
+     lineHeight: FONT_SIZE.medium + 8,
+   },
+diff --git a/components/Books/BookReader/Translation/TranslationBottomSheet.tsx b/components/Books/BookReader/Translation/TranslationBottomSheet.tsx
+index 74ee4a7..d3bf049 100644
+--- a/components/Books/BookReader/Translation/TranslationBottomSheet.tsx
++++ b/components/Books/BookReader/Translation/TranslationBottomSheet.tsx
+@@ -1,5 +1,5 @@
+ import { colors } from '../../../../styles/theme';
+-import React, { useRef, useEffect, useMemo, useState } from 'react';
++import React, { useRef, useEffect, useMemo } from 'react';
+ import {
+   View,
+   Text,
+@@ -13,19 +13,29 @@ import {
+ import LinearGradient from 'react-native-linear-gradient';
+ import { styles, COLORS } from './TranslationBottomSheet.styles';
+ import { localStyles } from './TranslationBottomSheet.local.styles';
+-import { normalizeFormsList, partOfSpeechMap } from './translationSheet.utils';
++import {
++  cardWordFontSize,
++  normalizeCardText,
++  normalizeFormsList,
++  partOfSpeechMap,
++} from './translationSheet.utils';
+ import { useAddWordAnimation } from './useAddWordAnimation';
+ import { WordType } from '../../../../types/words';
+ import { SelectedPhrase } from '../../../../types/BookReader.types';
+ import { capitalizeStandaloneI } from '../../../../utils/textFormatting';
+ import { flyFromView } from '../../../../services/dictionaryAddFx';
+-import { phraseFontSize } from '../../../../utils/longPhraseFont';
+ 
+ // 🟢 Статичні ресурси
+ const ICON_VOLUME = require('../../../../../assets/images/icons/volume.png');
+ const ICON_DELETE = require('../../../../../assets/images/icons/delete_2.png');
+ const ICON_ADD_TO_NOTES = require('../../../../../assets/images/icons/add-to-notes.webp');
+ 
++// Розмір шрифту в картці — фіксований: системне масштабування (Accessibility
++// → розмір тексту) більше не "розганяє" верстку старих карток. Єдина
++// дозволена зміна розміру — правило довгої фрази (cardWordFontSize).
++const FIXED_TEXT = { allowFontScaling: false } as const;
++const BASE_WORD_FONT_SIZE = styles.sheetWordText.fontSize as number;
++
+ interface TranslationBottomSheetProps {
+   selectedPhrase: SelectedPhrase | null;
+   wordDetails: WordType | null;
+@@ -87,11 +97,23 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+   const isTranslationFailed = wordDetails?.id === 0;
+   const activeIsAdded = isAdded;
+ 
+-  const rawText = wordDetails?.text || selectedPhrase?.text || '';
++  // Усі тексти картки проходять жорстку нормалізацію: старі записи містять
++  // зайві / подвійні / невидимі пробіли та розірвані дефіси.
++  const rawText = normalizeCardText(wordDetails?.text) || normalizeCardText(selectedPhrase?.text);
+   const displayWordText = capitalizeStandaloneI(rawText);
+-  // Довга фраза (понад 3 слова) — шрифт на 20% менший.
+-  const wordFontStyle = { fontSize: phraseFontSize(styles.sheetWordText.fontSize as number, displayWordText) };
+-  const displayBookDescription = wordDetails?.bookDescription ? ` (${wordDetails.bookDescription})` : '';
++  // Правило довгої фрази (понад 3 слова → −20%) рахується по ВЖЕ
++  // нормалізованому тексту: раніше подвійні пробіли давали "порожні слова",
++  // і коротка фраза старої картки раптом отримувала менший шрифт.
++  const wordFontSize = cardWordFontSize(BASE_WORD_FONT_SIZE, displayWordText);
++  const wordFontStyle = { fontSize: wordFontSize, lineHeight: Math.round(wordFontSize * 1.2) };
++  const displayTranslation = normalizeCardText(wordDetails?.translation);
++  const bookDescription = normalizeCardText(wordDetails?.bookDescription);
++  const displayBookDescription = bookDescription ? ` (${bookDescription})` : '';
++  const displayPronunciation = normalizeCardText(wordDetails?.pronunciation);
++  const displaySurfaceText = normalizeCardText(surfaceText);
++  const displaySurfaceTranslation = normalizeCardText(surfaceTranslation);
++  const exampleEng = normalizeCardText(wordDetails?.examples?.[0]).replace(/\.$/, '');
++  const exampleUkr = normalizeCardText(wordDetails?.examples?.[1]).replace(/\.$/, '');
+ 
+   const safeSpeakText = displayWordText;
+   const isPhraseOrPhrasalVerb =
+@@ -104,30 +126,22 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+   const displayForms = useMemo((): string => {
+     if (isTranslationFailed || !wordDetails) return '';
+     const fromServer = Array.isArray(verbForms)
+-      ? verbForms.filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
++      ? verbForms.map(normalizeCardText).filter((f) => f.length > 0)
+       : [];
+     if (fromServer.length > 0) return normalizeFormsList(fromServer);
+     const pos = wordDetails.partOfSpeech;
+     if ((pos === 'adjective' || pos === 'adverb') && Array.isArray(wordDetails.forms)) {
+-      return normalizeFormsList(wordDetails.forms.filter((f): f is string => typeof f === 'string'));
++      return normalizeFormsList(wordDetails.forms.map(normalizeCardText).filter((f) => f.length > 0));
+     }
+     return '';
+   }, [isTranslationFailed, wordDetails, verbForms]);
+ 
+   const retryLink = isTranslationFailed && onRetry ? (
+     <Pressable style={localStyles.retryLink} hitSlop={10} onPress={() => callbacksRef.current.onRetry?.()}>
+-      <Text style={localStyles.retryLinkText}>Спробувати ще раз</Text>
++      <Text {...FIXED_TEXT} style={localStyles.retryLinkText}>Спробувати ще раз</Text>
+     </Pressable>
+   ) : null;
+ 
+-  const [wordRowWidth, setWordRowWidth] = useState(0);
+-  const [wordRowContainerWidth, setWordRowContainerWidth] = useState(0);
+-
+-  const shouldOffsetWordRow =
+-    wordRowContainerWidth > 0 &&
+-    wordRowWidth > 0 &&
+-    wordRowWidth / wordRowContainerWidth > 0.7;
+-
+   const userJustAddedRef = useRef(false);
+ 
+   const currentSlideY = useRef(0);
+@@ -226,7 +240,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+       disabled={!!isReported}
+       onPress={() => callbacksRef.current.onReport?.()}
+     >
+-      <Text style={localStyles.reportLinkText}>
++      <Text {...FIXED_TEXT} style={localStyles.reportLinkText}>
+         {isReported ? 'Дякуємо ✓' : 'Неточно?'}
+       </Text>
+     </Pressable>
+@@ -277,24 +291,18 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+ 
+               {!isPhraseOrPhrasalVerb && (
+                 <>
+-                  <View
+-                    style={styles.sheetTopSection}
+-                    onLayout={(e) => setWordRowContainerWidth(e.nativeEvent.layout.width)}
+-                  >
++                  <View style={styles.sheetTopSection}>
+                     {reportLink}
+ 
+                     {wordDetails?.partOfSpeech && wordDetails.partOfSpeech !== 'none' && (
+                       <View style={localStyles.partOfSpeechTag}>
+-                        <Text style={localStyles.partOfSpeechText}>
++                        <Text {...FIXED_TEXT} style={localStyles.partOfSpeechText}>
+                           {partOfSpeechMap[wordDetails.partOfSpeech] || wordDetails.partOfSpeech}
+                         </Text>
+                       </View>
+                     )}
+ 
+-                    <View
+-                      style={[styles.wordHeaderRow, { maxWidth: '100%' }]}
+-                      onLayout={(e) => setWordRowWidth(e.nativeEvent.layout.width)}
+-                    >
++                    <View style={[styles.wordHeaderRow, { maxWidth: '100%' }]}>
+                       <Pressable
+                         style={({ pressed }) => [styles.audioButtonOnly, pressed && localStyles.buttonPressed]}
+                         hitSlop={8}
+@@ -308,7 +316,8 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+                       </Pressable>
+ 
+                       <Text
+-                        style={[styles.sheetWordText, wordFontStyle, shouldOffsetWordRow && { flexShrink: 1 }]}
++                        {...FIXED_TEXT}
++                        style={[styles.sheetWordText, wordFontStyle, { flexShrink: 1 }]}
+                         numberOfLines={2}
+                       >
+                         {displayWordText}
+@@ -316,18 +325,18 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+                     </View>
+ 
+                     <View style={styles.transcriptionContainer}>
+-                      <Text style={styles.transcriptionText}>
+-                        {wordDetails?.pronunciation ? `/${wordDetails.pronunciation}/` : ''}
++                      <Text {...FIXED_TEXT} style={styles.transcriptionText}>
++                        {displayPronunciation ? `/${displayPronunciation}/` : ''}
+                       </Text>
+                     </View>
+ 
+                     {/* Переклад у реченні — окремо від словникового перекладу леми нижче:
+                         "у тексті: telling → розповідає", а під ним "казати / розповідати". */}
+-                    {(!!surfaceText || !!surfaceTranslation) && (
+-                      <Text style={localStyles.surfaceText} numberOfLines={2}>
+-                        {surfaceText ? `у тексті: ${surfaceText}` : 'у цьому реченні'}
+-                        {!!surfaceTranslation && (
+-                          <Text style={localStyles.surfaceTranslation}>{`  →  ${surfaceTranslation}`}</Text>
++                    {(!!displaySurfaceText || !!displaySurfaceTranslation) && (
++                      <Text {...FIXED_TEXT} style={localStyles.surfaceText} numberOfLines={2}>
++                        {displaySurfaceText ? `у тексті: ${displaySurfaceText}` : 'у цьому реченні'}
++                        {!!displaySurfaceTranslation && (
++                          <Text {...FIXED_TEXT} style={localStyles.surfaceTranslation}>{`  →  ${displaySurfaceTranslation}`}</Text>
+                         )}
+                       </Text>
+                     )}
+@@ -337,15 +346,15 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+                     {!!displayForms && (
+                       <View style={styles.formsContainerWrapper}>
+                         <View style={styles.forms_element}>
+-                          <Text style={styles.forms_element_text}>{displayForms}</Text>
++                          <Text {...FIXED_TEXT} style={styles.forms_element_text}>{displayForms}</Text>
+                         </View>
+                       </View>
+                     )}
+ 
+                     <View style={styles.translationContainer}>
+-                      {wordDetails?.translation && (
+-                        <Text style={styles.translationText}>
+-                          {wordDetails.translation}{displayBookDescription}
++                      {!!displayTranslation && (
++                        <Text {...FIXED_TEXT} style={styles.translationText}>
++                          {displayTranslation}{displayBookDescription}
+                         </Text>
+                       )}
+                     </View>
+@@ -356,24 +365,18 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+ 
+               {isPhraseOrPhrasalVerb && (
+                 <View style={{ width: '100%' }}>
+-                  <View
+-                    style={styles.sheetTopSection}
+-                    onLayout={(e) => setWordRowContainerWidth(e.nativeEvent.layout.width)}
+-                  >
++                  <View style={styles.sheetTopSection}>
+                     {reportLink}
+ 
+                     {wordDetails?.partOfSpeech && wordDetails.partOfSpeech !== 'none' && (
+                       <View style={localStyles.partOfSpeechTag}>
+-                        <Text style={localStyles.partOfSpeechText}>
++                        <Text {...FIXED_TEXT} style={localStyles.partOfSpeechText}>
+                           {partOfSpeechMap[wordDetails.partOfSpeech] || wordDetails.partOfSpeech}
+                         </Text>
+                       </View>
+                     )}
+ 
+-                    <View
+-                      style={[styles.wordHeaderRow, { maxWidth: '100%' }]}
+-                      onLayout={(e) => setWordRowWidth(e.nativeEvent.layout.width)}
+-                    >
++                    <View style={[styles.wordHeaderRow, { maxWidth: '100%' }]}>
+                       <Pressable
+                         style={({ pressed }) => [styles.audioButtonOnly, pressed && localStyles.buttonPressed]}
+                         hitSlop={8}
+@@ -387,6 +390,7 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+                       </Pressable>
+ 
+                       <Text
++                        {...FIXED_TEXT}
+                         style={[styles.sheetWordText, wordFontStyle, { flexShrink: 1 }]}
+                         numberOfLines={2}
+                       >
+@@ -394,9 +398,9 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+                       </Text>
+                     </View>
+ 
+-                    {wordDetails?.pronunciation ? (
+-                      <Text style={[styles.transcriptionText, { marginTop: 2 }]}>
+-                        {`/${wordDetails.pronunciation}/`}
++                    {displayPronunciation ? (
++                      <Text {...FIXED_TEXT} style={[styles.transcriptionText, { marginTop: 2 }]}>
++                        {`/${displayPronunciation}/`}
+                       </Text>
+                     ) : null}
+                   </View>
+@@ -405,24 +409,24 @@ export const TranslationBottomSheet: React.FC<TranslationBottomSheetProps> = Rea
+                     {!!displayForms && (
+                       <View style={styles.formsContainerWrapper}>
+                         <View style={styles.forms_element}>
+-                          <Text style={styles.forms_element_text}>{displayForms}</Text>
++                          <Text {...FIXED_TEXT} style={styles.forms_element_text}>{displayForms}</Text>
+                         </View>
+                       </View>
+                     )}
+ 
+-                    {wordDetails?.translation && (
+-                      <Text style={[styles.translationText, { marginBottom: 12 }]}>
+-                        {wordDetails.translation}{displayBookDescription}
++                    {!!displayTranslation && (
++                      <Text {...FIXED_TEXT} style={[styles.translationText, { marginBottom: 12 }]}>
++                        {displayTranslation}{displayBookDescription}
+                       </Text>
+                     )}
+ 
+-                    {wordDetails?.examples && wordDetails.examples.length >= 2 && (
++                    {!!exampleEng && !!exampleUkr && (
+                       <View style={styles.examples}>
+-                        <Text style={styles.example_eng}>
+-                          {capitalizeStandaloneI(wordDetails.examples[0]?.replace(/\.\s*$/, '') || '')}
++                        <Text {...FIXED_TEXT} style={styles.example_eng}>
++                          {capitalizeStandaloneI(exampleEng)}
+                         </Text>
+-                        <Text style={styles.example_ukr}>
+-                          {wordDetails.examples[1]?.replace(/\.\s*$/, '')}
++                        <Text {...FIXED_TEXT} style={styles.example_ukr}>
++                          {exampleUkr}
+                         </Text>
+                       </View>
+                     )}
+diff --git a/components/Books/BookReader/Translation/translationSheet.utils.ts b/components/Books/BookReader/Translation/translationSheet.utils.ts
+index 714c8d4..3650008 100644
+--- a/components/Books/BookReader/Translation/translationSheet.utils.ts
++++ b/components/Books/BookReader/Translation/translationSheet.utils.ts
+@@ -26,3 +26,54 @@ export function normalizeFormsList(forms: string[]): string {
+     .filter(part => part.length > 0)
+     .join(' · ');
+ }
++
++// ─── Нормалізація тексту картки перекладу ───────────────────────────────
++// Старі записи словника приходять із "сміттям" після давніх прогонів
++// парсингу: пробіли по краях, подвійні / нерозривні пробіли, переноси
++// рядків, невидимі символи (м'який перенос, zero-width), пробіли перед
++// розділовими знаками і "розірвані" дефіси ("віз -аут"). Нові записи вже
++// чисті — для них ця функція нічого не змінює.
++
++// М'який перенос, пробіли нульової ширини, маркери напрямку, BOM.
++const INVISIBLE_CHARS = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
++// Нерозривні та "тонкі" пробіли, табуляції, переноси рядків → звичайний пробіл.
++const ODD_WHITESPACE = /[\u00A0\u2007\u202F\t\r\n\f\v]+/g;
++// Типографські апострофи → один вигляд (don’t / don't / donʼt).
++const APOSTROPHES = /[’‘ʼ`´]/g;
++// Літера (латиниця + кирилиця) — без \p{L}, щоб не залежати від підтримки
++// Unicode property escapes у версії Hermes.
++const LETTER = "[A-Za-zА-Яа-яЁёІіЇїЄєҐґ']";
++
++export function normalizeCardText(raw: unknown): string {
++  if (typeof raw !== 'string') return '';
++  return raw
++    .replace(INVISIBLE_CHARS, '')
++    .replace(ODD_WHITESPACE, ' ')
++    .replace(APOSTROPHES, "'")
++    // "віз -аут" / "віз- аут" → "віз-аут" (дефіс усередині слова). Тире з
++    // пробілами з обох боків (" - ") — це роздільник, його не чіпаємо.
++    .replace(new RegExp(`(${LETTER})\\s+-(?=${LETTER})`, 'g'), '$1-')
++    .replace(new RegExp(`(${LETTER})-\\s+(?=${LETTER})`, 'g'), '$1-')
++    // Пробіли перед розділовими знаками та всередині дужок.
++    .replace(/\s+([,.;:!?…)\]])/g, '$1')
++    .replace(/([(\[])\s+/g, '$1')
++    // Подвійні (і більше) пробіли всередині → один.
++    .replace(/\s{2,}/g, ' ')
++    .trim();
++}
++
++/** Кількість слів у вже нормалізованому тексті (порожній рядок → 0). */
++export function countCardWords(normalized: string): number {
++  return normalized ? normalized.split(' ').filter(Boolean).length : 0;
++}
++
++// Правило довгої фрази: понад 3 слова → шрифт на 20% менший. Інших
++// адаптацій розміру немає — лише ці два фіксовані значення.
++export const LONG_PHRASE_MIN_WORDS = 4;
++export const LONG_PHRASE_FONT_SCALE = 0.8;
++
++export function cardWordFontSize(baseFontSize: number, normalizedText: string): number {
++  return countCardWords(normalizedText) >= LONG_PHRASE_MIN_WORDS
++    ? Math.round(baseFontSize * LONG_PHRASE_FONT_SCALE)
++    : baseFontSize;
++}
+diff --git a/components/Books/Bookmarks/BookmarksMenu.tsx b/components/Books/Bookmarks/BookmarksMenu.tsx
+index f1b6550..f9fc218 100644
+--- a/components/Books/Bookmarks/BookmarksMenu.tsx
++++ b/components/Books/Bookmarks/BookmarksMenu.tsx
+@@ -67,8 +67,10 @@ interface BookmarksMenuProps {
+   onSaveBookmark?: (color: string, title: string, path: string) => void;
+   onDeleteBookmark?: (bookmark: SavedBookmark) => void;
+   /**
+-   * Скільки закладок у користувача загалом (усі книги). Ліміт 100 спільний,
+-   * а savedBookmarks у читалці — лише закладки цієї книги.
++   * Скільки закладок у користувача загалом (усі книги). Ліміт 100 спільний.
++   * І в списку книг, і в читалці savedBookmarks — уже глобальний список
++   * (усі книги, включно з прихованими), тож otherBooksCount нижче = 0;
++   * параметр лишається як страховка, якщо колись передадуть частковий список.
+    */
+   totalBookmarksCount?: number;
+ }
+diff --git a/hooks/books/bookmarks/useBookmarks.ts b/hooks/books/bookmarks/useBookmarks.ts
+index ec23e84..2816fae 100644
+--- a/hooks/books/bookmarks/useBookmarks.ts
++++ b/hooks/books/bookmarks/useBookmarks.ts
+@@ -56,10 +56,14 @@ export function useBookmarks({
+   const formattedBookmarks: SavedBookmark[] = useMemo(() => {
+     const safeBookmarks = Array.isArray(myBookmarks) ? myBookmarks : [];
+ 
+-    // /books/me/bookmarks повертає закладки з усіх книг — у читалці показуємо
+-    // лише закладки книги, яку зараз читають.
++    // ГЛОБАЛЬНИЙ список: /books/me/bookmarks повертає закладки користувача з
++    // УСІХ книг (включно з прихованими / архівними — їх не фільтруємо, бо
++    // приховання стосується лише бібліотеки, а не закладок). Фільтра за
++    // bookId більше немає: відкидаємо лише записи без коректних id книги /
++    // сторінки (на них неможливо перейти). Порядок — як віддав сервер
++    // (sortBookmarks у useBookManager), щоб нова закладка лишалась у кінці.
+     return safeBookmarks
+-      .filter((b) => b?.page?.chapter?.book?.id === bookId && isValidId(b?.page?.id))
++      .filter((b) => isValidId(b?.page?.chapter?.book?.id) && isValidId(b?.page?.id))
+       .map((b) => {
+         const bookTitle = b?.page?.chapter?.book?.title || 'Невідома книга';
+         const chapterTitle = b?.page?.chapter?.title || 'Невідомий розділ';
+@@ -75,7 +79,7 @@ export function useBookmarks({
+           }),
+         };
+       });
+-  }, [myBookmarks, bookId]);
++  }, [myBookmarks]);
+ 
+   const currentPageInfoPath = useMemo(() => {
+     return JSON.stringify({
+diff --git a/word/example-highlight-ai.service.ts b/word/example-highlight-ai.service.ts
+index a1feca4..20997a2 100644
+--- a/word/example-highlight-ai.service.ts
++++ b/word/example-highlight-ai.service.ts
+@@ -223,6 +223,8 @@ export class ExampleHighlightAiService {
+ 
+     while (scanning) {
+       const page = await this.wordRepo.find({
++        // Записи, виправлені вручну, AI-перегенерація прикладів не чіпає.
++        where: { isManuallyEdited: false },
+         order: { id: 'ASC' },
+         take: pageSize,
+         skip: offset,
+diff --git a/word/word-dto.ts b/word/word-dto.ts
+index 6f04878..604ff60 100644
+--- a/word/word-dto.ts
++++ b/word/word-dto.ts
+@@ -24,6 +24,14 @@ export class CreateWordDto {
+     @IsBoolean()
+     isProperNoun?: boolean;
+ 
++    /**
++     * Лише для admin/update: false — зняти захист ручної правки
++     * (true ставиться автоматично при будь-якій ручній зміні).
++     */
++    @IsOptional()
++    @IsBoolean()
++    isManuallyEdited?: boolean;
++
+     @IsNotEmpty()
+     @IsString()
+     description: string;
+diff --git a/word/word.controller.ts b/word/word.controller.ts
+index e80e975..de3a4a1 100644
+--- a/word/word.controller.ts
++++ b/word/word.controller.ts
+@@ -26,7 +26,7 @@ import {
+   ApiQuery,
+ } from '@nestjs/swagger';
+ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+-import { WordService, ProgressBatchResult, DictionaryFilters } from './word.service';
++import { WordService, ProgressBatchResult, DictionaryFilters, PhraseFilter } from './word.service';
+ import { Word } from './word.entity';
+ import { WordCategoryService, CategoryDraftPackageItem } from './category/word-category.service';
+ import { Request } from 'express';
+@@ -601,11 +601,22 @@ async getUserWordsPaginated(
+     description:
+       'Назва тематичної категорії (як у Word.category). Якщо передано — вибірка йде ТІЛЬКИ зі слів цієї категорії, а total/learned у відповіді рахуються в межах категорії. Якщо не передано — поведінка як і раніше (змішаний потік по всіх доступних програмах).',
+   })
++  @ApiQuery({ name: 'phraseLevels', required: false, description: 'Comma-separated рівні фраз (A1,A2…), які можуть підмішуватись у картки; без параметра — усі' })
++  @ApiQuery({ name: 'phraseCategories', required: false, description: 'Comma-separated теми фраз (як у Word.category); без параметра — усі' })
+   async getUserRandomWords(
+     @Req() req: JwtRequest,
+     @Query('category') category?: string,
++    @Query('phraseLevels') phraseLevelsStr?: string,
++    @Query('phraseCategories') phraseCategoriesStr?: string,
+   ) {
+-    return this.wordService.getUserRandomWordsForStudy(req.user.id, category);
++    const phraseFilter: PhraseFilter = {
++      levels: parseLevelsFilter(phraseLevelsStr),
++      categories: (phraseCategoriesStr ?? '')
++        .split(',')
++        .map((c) => c.trim())
++        .filter(Boolean),
++    };
++    return this.wordService.getUserRandomWordsForStudy(req.user.id, category, phraseFilter);
+   }
+ 
+   @Get('me/dictionary/random')
+diff --git a/word/word.entity.ts b/word/word.entity.ts
+index 3317163..5f6fde2 100644
+--- a/word/word.entity.ts
++++ b/word/word.entity.ts
+@@ -128,4 +128,22 @@ export class Word {
+ 
+   @Column({ type: 'varchar', length: 100, nullable: true })
+   category: string | null;
+-}
+\ No newline at end of file
++
++  /**
++   * Запис виправлено вручну (адмінка / CRM). Автоматичні процеси —
++   * перегенерація прикладів і підсвіток, bulk-імпорт, зміна типу з читалки,
++   * затвердження AI-скорочень — такі записи НЕ перезаписують.
++   * Ставиться автоматично в WordService.updateWords; зняти можна, явно
++   * передавши isManuallyEdited: false.
++   */
++  @Column({ type: 'boolean', default: false })
++  isManuallyEdited: boolean;
++
++  /** Коли запис востаннє змінено вручну (для аудиту). */
++  @Column({ type: 'timestamptz', nullable: true })
++  manuallyEditedAt: Date | null;
++}
++
++/** Чи може автоматичний процес змінювати цей запис. */
++export const canAutoOverwrite = (word: Pick<Word, 'isManuallyEdited'> | null | undefined): boolean =>
++  !!word && !word.isManuallyEdited;
+\ No newline at end of file
+diff --git a/word/word.service.ts b/word/word.service.ts
+index 2e597f5..8aae41e 100644
+--- a/word/word.service.ts
++++ b/word/word.service.ts
+@@ -16,7 +16,7 @@ import {
+   Repository,
+   UpdateResult,
+ } from 'typeorm';
+-import { Word, PartOfSpeech } from './word.entity';
++import { Word, PartOfSpeech, canAutoOverwrite } from './word.entity';
+ import { UserWord, StudyStatus, DictionarySourceType } from './user-word.entity';
+ import { User } from 'src/user/user.entity';
+ import { CreateWordDto, WordProgressItemDto } from './word-dto';
+@@ -70,9 +70,33 @@ interface CategoryCounts {
+   remaining: number;
+ }
+ 
++interface PhraseMeta {
++  /** CEFR-рівень фрази (word.level), нормалізований до 'A1'…'C2' або null. */
++  level: string | null;
++  /** Тема (word.category). */
++  category: string | null;
++  /**
++   * Фраза, яку користувач сам додав у словник і ще не вивчив там (або
++   * позначив улюбленою). Такі фрази НЕ блокуються ні статусом "вивчено" в
++   * картках програми, ні списком нещодавно показаних.
++   */
++  highPriority: boolean;
++}
++
+ interface WordIdPool {
+   byPos: Record<string, number[]>;
+   phraseIds: number[];
++  /** Метадані фраз за id (рівень, тема, пріоритет). */
++  phraseMeta: Record<number, PhraseMeta>;
++}
++
++/**
++ * Фільтр фраз для "шансу появи" в картках: за рівнями складності і темами.
++ * Порожні масиви / відсутній фільтр — без обмежень (поведінка як раніше).
++ */
++export interface PhraseFilter {
++  levels?: string[];
++  categories?: string[];
+ }
+ 
+ export interface WordCorrectionInfo {
+@@ -122,6 +146,20 @@ const NOT_LEARNED_SQL = `NOT EXISTS (
+     WHERE uwd."wordId" = word.id AND uwd."userId" = :userId AND uwd."status" = :learnedStatus
+   )`;
+ 
++/**
++ * Фраза з високим пріоритетом: користувач сам додав її у словник і там вона
++ * ще не вивчена, або позначив її улюбленою. Раніше такі фрази зникали з
++ * карток назавжди, щойно потрапляли в user_word_progress зі статусом
++ * LEARNED (NOT_LEARNED_SQL), — користувач їх "додав, але не бачить".
++ */
++const HIGH_PRIORITY_PHRASE_SQL = `EXISTS (
++    SELECT 1 FROM "user_word" uwh
++    WHERE uwh."wordId" = word.id AND uwh."userId" = :userId
++      AND (uwh."isFavorite" = true OR uwh."status" <> :learnedStatus)
++  )`;
++
++const PHRASE_TYPES_SQL = `word.type IN ('phrase', 'phrasal_verb')`;
++
+ const PROGRESS_QUEUE_FLUSH_MS = 150;
+ const PROGRESS_QUEUE_MAX_SIZE = 500;
+ 
+@@ -155,6 +193,10 @@ export class WordService implements OnModuleInit, OnModuleDestroy {
+   private readonly TOTAL_COUNT_TTL = 60 * 30;
+   private readonly BATCH_TTL = 60 * 3;
+   private readonly RECENT_SHOWN_MAX = 18;
++  /** Скільки фраз максимум підмішується в одну пачку (BATCH_SIZE слів). */
++  private readonly PHRASES_PER_BATCH = 1;
++  /** Шанс, що підмішана фраза буде саме з високим пріоритетом (якщо такі є). */
++  private readonly HIGH_PRIORITY_PHRASE_CHANCE = 0.7;
+ 
+   private readonly SRS_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30];
+   private readonly SRS_MAX_LEVEL = this.SRS_INTERVAL_DAYS.length - 1;
+@@ -589,10 +631,20 @@ export class WordService implements OnModuleInit, OnModuleDestroy {
+           `[BULK IMPORT] "${textKey}" ВЖЕ Є В БАЗІ (id=${existing.id}). Поточний стан запису: ${JSON.stringify(existing)}`,
+         );
+ 
++        // Запис виправлено вручну — імпорт його не доповнює і не змінює.
++        if (!canAutoOverwrite(existing)) {
++          skipped.push({
++            text: wordDto.text,
++            translation: wordDto.translation || existing.translation,
++            reason: `Запис виправлено вручну (ID: ${existing.id}) — автоматичний імпорт його не змінює`,
++          });
++          continue;
++        }
++
+         let hasFilledAnyField = false;
+ 
+         for (const key of Object.keys(wordDto) as Array<keyof CreateWordDto>) {
+-          if (key === 'text') continue;
++          if (key === 'text' || key === 'isManuallyEdited') continue;
+ 
+           const incomingValue = wordDto[key];
+           const incomingEmpty = this.isFieldEmpty(incomingValue, key as string);
+@@ -800,6 +852,8 @@ export class WordService implements OnModuleInit, OnModuleDestroy {
+    */
+   private async ensureBookEntryType(userId: number, word: Word): Promise<void> {
+     if (!word?.id || word.type === 'phrasal_verb') return;
++    // Тип, виставлений вручну, читалка не перезаписує.
++    if (!canAutoOverwrite(word)) return;
+     if ((word.text ?? '').trim().split(/\s+/).filter(Boolean).length < 2) return;
+     if (word.packageId) return;
+     try {
+@@ -873,9 +927,21 @@ export class WordService implements OnModuleInit, OnModuleDestroy {
+       const existing = await this.wordRepo.findOne({ where: { id: item.id } });
+       if (!existing) continue;
+ 
+-      const { id, createdAt, userWords, ...safeFields } = item as any;
++      const { id, createdAt, userWords, manuallyEditedAt, isManuallyEdited, ...safeFields } = item as any;
++
++      // Ручна правка через адмінку = запис захищено від автоматичних
++      // перезаписів. Явне isManuallyEdited: false знімає захист (напр. щоб
++      // дозволити перегенерацію).
++      const unlock = isManuallyEdited === false;
++      const hasContentChanges = Object.keys(safeFields).length > 0;
++      const protection = unlock
++        ? { isManuallyEdited: false, manuallyEditedAt: null }
++        : hasContentChanges || isManuallyEdited === true
++          ? { isManuallyEdited: true, manuallyEditedAt: new Date() }
++          : {};
+ 
+-      await this.wordRepo.update(id, safeFields);
++      if (!hasContentChanges && Object.keys(protection).length === 0) continue;
++      await this.wordRepo.update(id, { ...safeFields, ...protection });
+ 
+       const updated = await this.wordRepo.findOne({ where: { id } });
+       if (updated) {
+@@ -1737,7 +1803,16 @@ async getUserWordsPaginated(
+     userId: number,
+     searchText: string,
+   ): Promise<{ word: WordWithUserTranslation | null; isAdded: boolean }> {
+-    const cleanedText = searchText.replace(/[.,!?;:()'"`]/g, '').toLowerCase();
++    // Апостроф УСЕРЕДИНІ слова зберігаємо: раніше він вирізався разом з
++    // розділовими знаками, і "let's go" шукалось як "lets go" (не знаходилось).
++    // Прибираємо лише лапки / апострофи по краях.
++    const cleanedText = searchText
++      .replace(/[’‘ʼ]/g, "'")
++      .replace(/[.,!?;:()"`]/g, '')
++      .replace(/^'+|'+$/g, '')
++      .replace(/\s+/g, ' ')
++      .trim()
++      .toLowerCase();
+ 
+     const word = await this.wordRepo.findOne({
+       where: [
+@@ -2242,11 +2317,15 @@ async getUserWordsPaginated(
+     return { totalWords, learnedWords };
+   }
+ 
+-  async getUserRandomWordsForStudy(userId: number, category?: string): Promise<any[]> {
++  async getUserRandomWordsForStudy(
++    userId: number,
++    category?: string,
++    phraseFilter?: PhraseFilter,
++  ): Promise<any[]> {
+   try {
+     const cleanCategory = category?.trim();
+     if (cleanCategory) {
+-      return await this.getUserRandomWordsForStudyByCategory(userId, cleanCategory);
++      return await this.getUserRandomWordsForStudyByCategory(userId, cleanCategory, phraseFilter);
+     }
+ 
+     const user = await this.userRepo.findOne({
+@@ -2266,7 +2345,7 @@ async getUserWordsPaginated(
+       return [];
+     }
+ 
+-    const batchKey = `user:${userId}:word-batch:mixed`;
++    const batchKey = `user:${userId}:word-batch:mixed${this.phraseFilterKey(phraseFilter)}`;
+     const batch = await this.cacheService.get<WordBatchCache>(batchKey);
+ 
+     let slice: any[];
+@@ -2279,7 +2358,7 @@ async getUserWordsPaginated(
+         this.BATCH_TTL,
+       );
+     } else {
+-      const newBatch = await this.generateWordBatch(userId, active.packageIds);
++      const newBatch = await this.generateWordBatch(userId, active.packageIds, phraseFilter);
+       if (newBatch.length === 0) return [];
+ 
+       await this.cacheService.set(
+@@ -2328,35 +2407,19 @@ private async getIdPoolByCategory(
+   userId: number,
+   category: string,
+ ): Promise<WordIdPool | null> {
+-  const cacheKey = `user:${userId}:id-pool:category:${category}`;
++  // v2: у пулі з'явились phraseMeta (рівень / тема / пріоритет фраз).
++  const cacheKey = `user:${userId}:id-pool:category:v2:${category}`;
+ 
+   const cached = await this.cacheService.get<WordIdPool>(cacheKey);
+   if (cached) return cached;
+ 
+-  const rows = await this.wordRepo
+-    .createQueryBuilder('word')
+-    .select('word.id', 'id')
+-    .addSelect('word.partOfSpeech', 'pos')
+-    .addSelect('word.type', 'type')
++  const rows = await this.selectPoolRows(userId)
+     .where('word.category = :category', { category })
+-    .andWhere(NOT_LEARNED_SQL, { userId, learnedStatus: StudyStatus.LEARNED })
+-    .getRawMany<{ id: number; pos: string; type: string }>();
+-
+-  if (rows.length === 0) return null;
+-
+-  const byPos: Record<string, number[]> = {};
+-  const phraseIds: number[] = [];
++    .andWhere(`(${NOT_LEARNED_SQL} OR (${PHRASE_TYPES_SQL} AND${HIGH_PRIORITY_PHRASE_SQL}))`)
++    .getRawMany<PoolRow>();
+ 
+-  for (const row of rows) {
+-    if (row.type === 'phrase' || row.type === 'phrasal_verb') {
+-      phraseIds.push(row.id);
+-      continue;
+-    }
+-    const pos = row.pos || 'unknown';
+-    (byPos[pos] ??= []).push(row.id);
+-  }
+-
+-  const result: WordIdPool = { byPos, phraseIds };
++  const result = this.buildIdPool(rows);
++  if (!result) return null;
+   await this.cacheService.set(cacheKey, result, this.ID_POOL_TTL);
+   return result;
+ }
+@@ -2364,6 +2427,7 @@ private async getIdPoolByCategory(
+ private async generateWordBatchByCategory(
+   userId: number,
+   category: string,
++  phraseFilter?: PhraseFilter,
+ ): Promise<any[]> {
+   const pool = await this.getIdPoolByCategory(userId, category);
+   if (!pool) return [];
+@@ -2381,24 +2445,7 @@ private async generateWordBatchByCategory(
+     chosenIds.push(...triple);
+   }
+ 
+-  if (chosenIds.length === 0 && pool.phraseIds.length > 0) {
+-    const excludeSet = new Set(recentIds);
+-    let candidates = pool.phraseIds.filter((id) => !excludeSet.has(id));
+-    if (candidates.length < this.BATCH_SIZE) candidates = [...pool.phraseIds];
+-
+-    while (chosenIds.length < this.BATCH_SIZE && candidates.length > 0) {
+-      const idx = Math.floor(Math.random() * candidates.length);
+-      chosenIds.push(candidates.splice(idx, 1)[0]);
+-    }
+-  } else if (pool.phraseIds.length > 0 && chosenIds.length > 0) {
+-    const excludeSet = new Set(recentIds);
+-    let phraseCandidates = pool.phraseIds.filter((id) => !excludeSet.has(id));
+-    if (phraseCandidates.length === 0) phraseCandidates = pool.phraseIds;
+-
+-    const phrasePick = phraseCandidates[Math.floor(Math.random() * phraseCandidates.length)];
+-    const replaceIndex = Math.floor(Math.random() * chosenIds.length);
+-    chosenIds[replaceIndex] = phrasePick;
+-  }
++  this.mixPhrasesIntoBatch(pool, chosenIds, recentIds, phraseFilter);
+ 
+   if (chosenIds.length === 0) return [];
+ 
+@@ -2422,6 +2469,7 @@ private async generateWordBatchByCategory(
+ private async getUserRandomWordsForStudyByCategory(
+   userId: number,
+   category: string,
++  phraseFilter?: PhraseFilter,
+ ): Promise<any[]> {
+   const stats = await this.getCategoryStatsForUser(userId, category);
+ 
+@@ -2432,7 +2480,7 @@ private async getUserRandomWordsForStudyByCategory(
+     return [];
+   }
+ 
+-  const batchKey = `user:${userId}:word-batch:category:${category}`;
++  const batchKey = `user:${userId}:word-batch:category:${category}${this.phraseFilterKey(phraseFilter)}`;
+   const batch = await this.cacheService.get<WordBatchCache>(batchKey);
+ 
+   let slice: any[];
+@@ -2445,7 +2493,7 @@ private async getUserRandomWordsForStudyByCategory(
+       this.BATCH_TTL,
+     );
+   } else {
+-    const newBatch = await this.generateWordBatchByCategory(userId, category);
++    const newBatch = await this.generateWordBatchByCategory(userId, category, phraseFilter);
+     if (newBatch.length === 0) return [];
+ 
+     await this.cacheService.set(
+@@ -2583,6 +2631,7 @@ private async getUserRandomWordsForStudyByCategory(
+   private async generateWordBatch(
+     userId: number,
+     packageIds: number[],
++    phraseFilter?: PhraseFilter,
+   ): Promise<any[]> {
+     const pool = await this.getIdPoolByPos(userId, packageIds);
+     if (!pool) return [];
+@@ -2600,24 +2649,7 @@ private async getUserRandomWordsForStudyByCategory(
+       chosenIds.push(...triple);
+     }
+ 
+-    if (chosenIds.length === 0 && pool.phraseIds.length > 0) {
+-      const excludeSet = new Set(recentIds);
+-      let candidates = pool.phraseIds.filter((id) => !excludeSet.has(id));
+-      if (candidates.length < this.BATCH_SIZE) candidates = [...pool.phraseIds];
+-
+-      while (chosenIds.length < this.BATCH_SIZE && candidates.length > 0) {
+-        const idx = Math.floor(Math.random() * candidates.length);
+-        chosenIds.push(candidates.splice(idx, 1)[0]);
+-      }
+-    } else if (pool.phraseIds.length > 0 && chosenIds.length > 0) {
+-      const excludeSet = new Set(recentIds);
+-      let phraseCandidates = pool.phraseIds.filter((id) => !excludeSet.has(id));
+-      if (phraseCandidates.length === 0) phraseCandidates = pool.phraseIds;
+-
+-      const phrasePick = phraseCandidates[Math.floor(Math.random() * phraseCandidates.length)];
+-      const replaceIndex = Math.floor(Math.random() * chosenIds.length);
+-      chosenIds[replaceIndex] = phrasePick;
+-    }
++    this.mixPhrasesIntoBatch(pool, chosenIds, recentIds, phraseFilter);
+ 
+     if (chosenIds.length === 0) return [];
+ 
+@@ -2642,39 +2674,160 @@ private async getUserRandomWordsForStudyByCategory(
+     userId: number,
+     packageIds: number[],
+   ): Promise<WordIdPool | null> {
+-    const cacheKey = `user:${userId}:id-pool:mixed:v2:${packageIds.join('-')}`;
++    // v3: у пулі з'явились phraseMeta (рівень / тема / пріоритет фраз).
++    const cacheKey = `user:${userId}:id-pool:mixed:v3:${packageIds.join('-')}`;
+ 
+     const cached = await this.cacheService.get<WordIdPool>(cacheKey);
+     if (cached) return cached;
+ 
+-    const rows = await this.wordRepo
++    const rows = await this.selectPoolRows(userId)
++      .where('word.packageId IN (:...packageIds)', { packageIds })
++      .andWhere(`(${NOT_LEARNED_SQL} OR (${PHRASE_TYPES_SQL} AND${HIGH_PRIORITY_PHRASE_SQL}))`)
++      .getRawMany<PoolRow>();
++
++    const result = this.buildIdPool(rows);
++    if (!result) return null;
++    await this.cacheService.set(cacheKey, result, this.ID_POOL_TTL);
++    return result;
++  }
++
++  /** Спільний SELECT для пулів карток: id, частина мови, тип, рівень, тема, пріоритет фрази. */
++  private selectPoolRows(userId: number) {
++    return this.wordRepo
+       .createQueryBuilder('word')
+       .select('word.id', 'id')
+       .addSelect('word.partOfSpeech', 'pos')
+       .addSelect('word.type', 'type')
+-      .where('word.packageId IN (:...packageIds)', { packageIds })
+-      .andWhere(NOT_LEARNED_SQL, { userId, learnedStatus: StudyStatus.LEARNED })
+-      .getRawMany<{ id: number; pos: string; type: string }>();
++      .addSelect('word.level', 'level')
++      .addSelect('word.category', 'category')
++      .addSelect(`(${PHRASE_TYPES_SQL} AND${HIGH_PRIORITY_PHRASE_SQL})`, 'highPriority')
++      .setParameters({ userId, learnedStatus: StudyStatus.LEARNED });
++  }
+ 
++  /**
++   * Розкладає рядки пулу: звичайні слова — за частиною мови, фрази — окремо.
++   * Звичайне слово, яке потрапило сюди лише як "високий пріоритет", не
++   * можливе (умова пріоритету діє тільки для фраз), тож для слів логіка
++   * NOT_LEARNED_SQL лишається незмінною.
++   */
++  private buildIdPool(rows: PoolRow[]): WordIdPool | null {
+     if (rows.length === 0) return null;
+ 
+     const byPos: Record<string, number[]> = {};
+     const phraseIds: number[] = [];
++    const phraseMeta: Record<number, PhraseMeta> = {};
+ 
+     for (const row of rows) {
+       if (row.type === 'phrase' || row.type === 'phrasal_verb') {
+         phraseIds.push(row.id);
++        phraseMeta[row.id] = {
++          level: parseLevelsFilter(row.level ?? '')[0] ?? null,
++          category: row.category?.trim() || null,
++          highPriority: row.highPriority === true || (row.highPriority as unknown) === 't',
++        };
+         continue;
+       }
+       const pos = row.pos || 'unknown';
+       (byPos[pos] ??= []).push(row.id);
+     }
+ 
+-    const result: WordIdPool = { byPos, phraseIds };
+-    await this.cacheService.set(cacheKey, result, this.ID_POOL_TTL);
++    return { byPos, phraseIds, phraseMeta };
++  }
++
++  /**
++   * "Шанс появи" фрази в пачці карток. Раніше: одна випадкова фраза з
++   * невивчених, без фільтрів; фраза з recent-списку відсувалась, а вивчена
++   * в картках зникала назавжди. Тепер:
++   *  1) фільтр за рівнями (A1, A2…) і темами (word.category) — якщо задано;
++   *  2) фрази з високим пріоритетом (див. HIGH_PRIORITY_PHRASE_SQL) мають
++   *     HIGH_PRIORITY_PHRASE_CHANCE шанс бути обраними першими і НЕ
++   *     блокуються recent-списком: свіжі пріоритетні йдуть першими, але
++   *     якщо всі пріоритетні нещодавно показувались — фраза все одно
++   *     показується (раніше саме тут вона "не випадала");
++   *  3) звичайні фрази — як і раніше: спершу ті, що не показувались
++   *     нещодавно, інакше будь-яка.
++   * Повертає до `count` id фраз.
++   */
++  private pickPhraseIds(
++    pool: WordIdPool,
++    recentIds: number[],
++    count: number,
++    filter?: PhraseFilter,
++  ): number[] {
++    if (count <= 0 || pool.phraseIds.length === 0) return [];
++
++    const levels = filter?.levels?.length ? new Set(filter.levels.map((l) => l.toUpperCase())) : null;
++    const categories = filter?.categories?.length
++      ? new Set(filter.categories.map((c) => c.trim().toLowerCase()).filter(Boolean))
++      : null;
++    // Старий кеш пулу (до phraseMeta) — без метаданих: вважаємо фразу
++    // звичайною і без рівня/теми, щоб нічого не впало до оновлення кешу.
++    const metaOf = (id: number): PhraseMeta =>
++      pool.phraseMeta?.[id] ?? { level: null, category: null, highPriority: false };
++
++    const eligible = pool.phraseIds.filter((id) => {
++      const meta = metaOf(id);
++      if (levels && (!meta.level || !levels.has(meta.level))) return false;
++      if (categories && (!meta.category || !categories.has(meta.category.toLowerCase()))) return false;
++      return true;
++    });
++    if (eligible.length === 0) return [];
++
++    const recentSet = new Set(recentIds);
++    const freshFirst = (ids: number[]) => {
++      const fresh = ids.filter((id) => !recentSet.has(id));
++      return fresh.length > 0 ? fresh : ids;
++    };
++    const high = freshFirst(eligible.filter((id) => metaOf(id).highPriority));
++    const normal = freshFirst(eligible.filter((id) => !metaOf(id).highPriority));
++
++    const result: number[] = [];
++    const takeRandom = (from: number[]) => {
++      const left = from.filter((id) => !result.includes(id));
++      if (left.length === 0) return false;
++      result.push(left[Math.floor(Math.random() * left.length)]);
++      return true;
++    };
++
++    while (result.length < count) {
++      const preferHigh = high.length > 0 && (normal.length === 0 || Math.random() < this.HIGH_PRIORITY_PHRASE_CHANCE);
++      const picked = preferHigh ? takeRandom(high) || takeRandom(normal) : takeRandom(normal) || takeRandom(high);
++      if (!picked) break;
++    }
+     return result;
+   }
+ 
++  /**
++   * Підмішує фрази в пачку: якщо звичайних слів немає — пачка цілком із
++   * фраз; інакше до PHRASES_PER_BATCH фраз замінюють випадкові слова.
++   */
++  private mixPhrasesIntoBatch(
++    pool: WordIdPool,
++    chosenIds: number[],
++    recentIds: number[],
++    filter?: PhraseFilter,
++  ): void {
++    if (chosenIds.length === 0) {
++      chosenIds.push(...this.pickPhraseIds(pool, recentIds, this.BATCH_SIZE, filter));
++      return;
++    }
++
++    const phrases = this.pickPhraseIds(pool, recentIds, this.PHRASES_PER_BATCH, filter);
++    const freeSlots = chosenIds.map((_, i) => i);
++    for (const phraseId of phrases) {
++      if (freeSlots.length === 0) break;
++      const slot = freeSlots.splice(Math.floor(Math.random() * freeSlots.length), 1)[0];
++      chosenIds[slot] = phraseId;
++    }
++  }
++
++  /** Суфікс ключа кешу пачки, щоб пачки з різними фільтрами фраз не змішувались. */
++  private phraseFilterKey(filter?: PhraseFilter): string {
++    const levels = [...(filter?.levels ?? [])].map((l) => l.toUpperCase()).sort().join(',');
++    const categories = [...(filter?.categories ?? [])].map((c) => c.trim().toLowerCase()).sort().join(',');
++    return levels || categories ? `:pf:${levels}\vert{}${categories}` : '';
++  }
++
+ 
+   private pickRandomIdsFromPool(
+     pool: Record<string, number[]>,
+@@ -3017,6 +3170,15 @@ private async getUserRandomWordsForStudyByCategory(
+ 
+ }
+ 
++interface PoolRow {
++  id: number;
++  pos: string;
++  type: string;
++  level: string | null;
++  category: string | null;
++  highPriority: boolean;
++}
++
+ interface WordBatchCache {
+   words: any[];
+   cursor: number;
+diff --git a/word/words-details/example-shortening-ai.service.ts b/word/words-details/example-shortening-ai.service.ts
+index c4235df..973a7af 100644
+--- a/word/words-details/example-shortening-ai.service.ts
++++ b/word/words-details/example-shortening-ai.service.ts
+@@ -381,6 +381,11 @@ export class ExampleShorteningAiService {
+     let appliedCount = 0;
+     for (const item of targets) {
+       const word = wordsById.get(item.wordId);
++      if (word && word.isManuallyEdited) {
++        item.status = 'rejected';
++        item.errorMessage = 'Запис виправлено вручну — автоматична заміна прикладів заборонена (зніміть isManuallyEdited, щоб застосувати).';
++        continue;
++      }
+       if (!word || !item.newExamples) {
+         item.status = 'error';
+         item.errorMessage = 'Слово не знайдено в БД під час затвердження (можливо, видалено раніше).';
+diff --git a/word/words-details/word-generation.service.ts b/word/words-details/word-generation.service.ts
+index 4ecaa1c..5ffb616 100644
+--- a/word/words-details/word-generation.service.ts
++++ b/word/words-details/word-generation.service.ts
+@@ -2425,6 +2425,14 @@ interjection, numeral, none. Визнач її для ролі слова В Р
+    * до іншого наявного запису, і читач бачив переклад зовсім не того.
+    */
+   private isAcceptedAiLemma(candidate: string, original: string): boolean {
++    // "let's go" → "let go": AI "з'їв" скорочення ('s, 't, 're, 'll, 've, 'd, 'm),
++    // і вийшла ІНША фраза (let go = відпустити). Таку лему не приймаємо —
++    // лишається оригінальний запит з апострофом.
++    if (this.dropsContractionClitic(candidate, original)) {
++      this.logger.warn(`⚠️ AI відкинув скорочення з апострофом: "${original}" → "${candidate}". Лему відхилено.`);
++      return false;
++    }
++
+     const plausible = candidate.includes(' ')
+       ? this.isPlausiblePhrase(candidate, original)
+       : this.isPlausibleLemma(candidate, original);
+@@ -2437,6 +2445,33 @@ interjection, numeral, none. Визнач її для ролі слова В Р
+     return true;
+   }
+ 
++  /**
++   * Чи AI просто відрізав скорочення від слова, а не розгорнув його:
++   *   "let's go"   → "let go"    — так (відкинуто 's)
++   *   "don't stop" → "do stop"   — так (відкинуто n't)
++   *   "don't stop" → "do not stop" — ні (розгорнуто, слів стало більше)
++   *   "ivan's"     → "ivan"      — ні (присвійна форма імені — це дозволено)
++   * Однослівний запит перевіряємо лише для скорочень займенників / "let"
++   * (NON_POSSESSIVE_S), щоб не зламати правило присвійних форм імен.
++   */
++  private dropsContractionClitic(candidate: string, original: string): boolean {
++    const norm = (v: string) => v.toLowerCase().replace(/[’‘ʼ`´]/g, "'").replace(/\s+/g, ' ').trim();
++    const o = norm(original).split(' ').filter(Boolean);
++    const c = norm(candidate).split(' ').filter(Boolean);
++    if (o.length === 0 || o.length !== c.length) return false;
++
++    const CLITIC = /^([a-z]+?)(n't|'s|'re|'ll|'ve|'d|'m|'t)$/;
++    return o.some((token, i) => {
++      const m = CLITIC.exec(token);
++      if (!m || c[i] === token) return false;
++      const base = m[1];
++      // can't → "can" / "ca", let's → "let" / "lets"
++      const stripped = [base, token.replace(/'/g, ''), m[2] === "n't" ? `${base}n` : ''];
++      if (!stripped.includes(c[i])) return false;
++      return o.length > 1 || NON_POSSESSIVE_S.has(base);
++    });
++  }
++
+   private isPlausiblePhrase(candidate: string, original: string): boolean {
+     const c = candidate.trim();
+     if (!c) return false;
+@@ -2612,6 +2647,10 @@ interjection, numeral, none. Визнач її для ролі слова В Р
+   (з великої літери), навіть якщо запит був написаний з малої.
+ 
+   🔥 КРИТИЧНО ВАЖЛИВО (Розгортання скорочень): СУВОРО ЗАБОРОНЕНО повертати в це поле слова зі скороченнями та апострофами (n't, 'm, 's, 're, 'll, 've) — ОКРІМ присвійного 's при особових іменах, який просто відкидається (див. вище).
++  ⚠️ "let's" — НЕ присвійна форма і НЕ дієслово для розгортання: це стала форма.
++  НІКОЛИ не відкидай від неї "'s": "let's go" → "let's go" (НЕ "let go" — це інша фраза "відпустити").
++  Те саме для будь-якого скорочення: або розгорни повністю ("don't" → "do not"), або залиш як є —
++  але НІКОЛИ не обрізай апостроф разом із буквами після нього.
+   Якщо запит є скороченням дієслова, ОБОВ'ЯЗКОВО розгорни його в повну, граматично правильну форму (без апострофа):
+     didn't → did not
+     don't → do not
+@@ -2896,6 +2935,10 @@ ${sections.join('\n\n═══════════════════
+   "John's") → поверни саме ім'я без апострофа/закінчення: "Ivan's" → "Ivan".
+ 
+   🔥 КРИТИЧНО ВАЖЛИВО (розгортання скорочень): СУВОРО ЗАБОРОНЕНО залишати слова з апострофами (n't, 'm, 're, 'll, 've) — окрім присвійного 's при особових іменах, який просто відкидається.
++  ⚠️ "let's" — НЕ присвійна форма і НЕ дієслово для розгортання: це стала форма.
++  НІКОЛИ не відкидай від неї "'s": "let's go" → "let's go" (НЕ "let go" — це інша фраза "відпустити").
++  Те саме для будь-якого скорочення: або розгорни повністю ("don't" → "do not"), або залиш як є —
++  але НІКОЛИ не обрізай апостроф разом із буквами після нього.
+   Якщо запит є скороченням дієслова, ОБОВ'ЯЗКОВО розгорни його в повну форму:
+     didn't → did not
+     don't → do not
